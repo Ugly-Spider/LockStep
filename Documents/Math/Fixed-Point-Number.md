@@ -14,7 +14,7 @@
 - 三角函数
 - 与int、float互转
 
-定义一些基本的常量
+### 定义一些基本的常量
 ```c#
         public const int BIT_NUM = 64;
         public const int FRACTION_BIT_NUM = 32;
@@ -42,6 +42,7 @@
         public static readonly FP Precision = new FP(1);
 ```
 
+### 加减法
 加法减法比较简单，不过需要注意一些特殊情况，NaN加减任何数都是NaN，正无穷+负无穷=NaN
 ```c#
         public static FP operator +(FP a, FP b)
@@ -95,7 +96,18 @@
 
 这里发现 `FP r; r._rawValue = 10;` 比 `FP r = new FP(10);` 这种写法更快，对比了它们的汇编后发现，前者少了一次构造函数的调用。
 
-乘法，直接使用rawValue相乘再除系数并不可行，因为rawValue相乘时会溢出；rawValue除系数后再乘也不可行，如果被除数小于1，结果就是0了，所以需要把整数部分和小数部分分别相乘，再相加到一起。
+### 乘法
+乘法，直接使用rawValue相乘再除系数并不可行，因为rawValue相乘时会溢出；rawValue除系数后再乘也不可行，如果被除数小于1，结果就是0了。</br>
+我们可以拆分一下`a * b = (ia + fa) * (ib + fb)//ia代表a的整数部分，fa代表a的小数部分`</br>
+如果a, b都是正数:`1.2 * 2.4 = (1 + 0.2) * (2 + 0.4)`</br>
+如果a是正数，b是负数:`1.2 * (-2.4) = (1 + 0.2) * (-3 + 0.6)`</br>
+而无论是正数还是负数的取整操作都可以通过`_rawValue >> FRACTION_BIT_NUM`来实现，取小数的操作都可以通过`_rawValue & FRACTION_MASK`来实现。</br>
+这里用8位来举例(1位符号位，3位整数，4位小数)：
+* `+1.75` 的补码是 `0001 1100` `0001 1100 >> 4 = 0000 0001(+1)` `0001 1100 & 0000 1111 = 0000 1100(0.75)`
+* `-1.75` 的补码是 `1110 0100` `1110 0100 >> 4 = 0000 1110(-2)` `1110 0100 & 0000 1111 = 0000 0100(0.25)`
+
+`fa`和`fb`需要转换为ulong，否则当`fa * fb >= 0.5`时会溢出</br>
+
 这里又发现了一个比较有意思的问题，`0*∞=?`，我的第一反应是0，因为0乘任何数都等于0，但是我用float测试了一下，发现结果是NaN，思考了一下，应该是这样的`1/∞=0, 2/∞=0...`所以反推`0*∞=1, 0*∞=2...`，可能的值有无数种，所以无法判断，就等于NaN了。
 ```c#
         public static FP operator *(FP a, FP b)
@@ -124,9 +136,53 @@
         }
 ```
 
-除法:TODO
+### 除法
+这里计算除法的思路和手工计算除法的思路相同
+```c#
+        public static FP operator /(FP a, FP b)
+        {
+            if (a._rawValue == NAN || b._rawValue == NAN || (a._rawValue == 0 && b._rawValue == 0)) return NaN;
+            var sign = ((a._rawValue ^ b._rawValue) & long.MinValue) == 0;
+            if (b._rawValue == 0) return sign ? PositiveInfinite : NegativeInfinite;
+            
+            var ra = (ulong) a._rawValue;
+            var rb = (ulong) b._rawValue;
+            if ((ra & SIGN_MASK) != 0) //negative
+            {
+                ra = ulong.MaxValue - (ra + 1);
+            }
+            if ((rb & SIGN_MASK) != 0) //negative
+            {
+                rb = ulong.MaxValue - (rb + 1);
+            }
+            var c = 0ul;
+            var rr = 0ul;
+            for (int i = 0; i < BIT_NUM + FRACTION_BIT_NUM; ++i)
+            {
+                var t = ra & SIGN_MASK;
+                ra <<= 1;
+                c <<= 1;
+                if (t != 0)
+                {
+                    c |= 0x1;
+                }
+            
+                rr <<= 1;
+                if (c >= rb)
+                {
+                    rr |= 0x1;
+                    c -= rb;
+                }
+            }
 
-求绝对值
+            FP r;
+            r._rawValue = sign ? (long)rr : -((long)rr);
+            return r;
+        }
+```
+
+
+### 绝对值
 ```c#
         public static FP Abs(FP x)
         {
@@ -138,13 +194,77 @@
         }
 ```
 
-三角函数
+### 求平方根
+这里使用牛顿迭代法`x' = x - f(x) / f'(x) `
+```c#
+        public static FP Sqrt(FP x)
+        {
+            if (x._rawValue == 0) return Zero;
+            if(x._rawValue < 0) throw new Exception("Input number can't be negative!");
+            if (x._rawValue == NAN) return NaN;
+            
+            var r = x * FP.Half;
+            int t = 10;
+            for (int i = 0; i < t; ++i)
+            {
+                r -= (r * r - x) / (2 * r);
+            }
+
+            return r;
+        }
+```
+
+### 幂运算
+```c#
+        public static FP Pow(FP x, int p)
+        {
+            if(p < 0) throw new Exception("P can't be negative!");
+            if (x._rawValue == NAN) return NaN;
+            return InternalPow(x, p);
+        }
+
+        private static FP InternalPow(FP x, int p)
+        {
+            if (p == 0) return 1;
+            if (p == 1) return x;
+
+            if (p % 2 == 0) return InternalPow(x, p / 2) * InternalPow(x, p / 2);
+            else return InternalPow(x, p / 2) * InternalPow(x, p / 2) * x;
+        }
+```
+
+### 三角函数
 三角函数可以通过查表法，提前生成一个三角函数表，比如每隔1度计算一次sin值，然后计算时取最接近的两个角度的插值，这样做牺牲一丢丢的内存，不过效率很高。
 为了得到更多的练习，这里我们打算自己计算，这里通过泰勒级数累加10次近似计算。
 (这里有一个通俗易懂的关于如何理解泰勒级数的帖子[https://blog.csdn.net/qq_33414271/article/details/78783935])
 ```c#
+        public static FP Cos(FP radiant)
+        {
+            if (radiant._rawValue == NAN) return NaN;
+            
+            var r = FP.One;
+            var t = 10;
+            var xs = radiant;
+            var factorial = 1;
+            for (int i = 1; i < t + 1; ++i)
+            {
+                factorial *= i;
+             
+                FP c = 0;
+                if (i % 4 == 0) c = 1;
+                else if (i % 4 == 2) c = -1;
+                r += c * xs / factorial;
+                xs *= radiant;
+            }
+
+            return r;
+        }
+        
+        
         public static FP Sin(FP radiant)
         {
+            if (radiant._rawValue == NAN) return NaN;
+            
             var r = FP.Zero;
             var t = 10;
             var xs = radiant;
@@ -162,6 +282,11 @@
 
             return r;
         }
+
+        public static FP Tan(FP radiant)
+        {
+            return Sin(radiant) / Cos(radiant);
+        }
 ```
 
-未完待续...
+参考：PhotonTrueSync/Fix64
