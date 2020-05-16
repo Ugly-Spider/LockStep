@@ -289,4 +289,61 @@
         }
 ```
 
+### 互转
+```c#
+        public float ToFloat()
+        {
+            if (_rawValue == NAN) return float.NaN;
+            
+            return (float)_rawValue / ONE;
+        }
+
+        public int ToInt()
+        {
+            if(_rawValue == NAN) throw new Exception("NaN can't convert to int");
+            
+            return (int)(_rawValue / ONE);
+        }
+
+        public int RoundToInt()
+        {
+            var i = ToInt();
+            var f = _rawValue & FRACTION_MASK;
+            if (_rawValue < 0) f = (~(f - 1)) & FRACTION_MASK;
+            if (f >= Half._rawValue)
+            {
+                if (_rawValue >= 0)
+                {
+                    ++i;
+                }
+                else
+                {
+                    --i;
+                }
+            }
+            return i;
+        }
+        
+        public static implicit operator FP(double x)
+        {
+            FP r;
+            r._rawValue = (long)(x * ONE);
+            return r;
+        }
+
+        public static implicit operator FP(int x)
+        {
+            FP r;
+            r._rawValue = x * ONE;
+            return r;
+        }
+
+        public static FP FromRawValue(long x)
+        {
+            FP r;
+            r._rawValue = x;
+            return r;
+        }
+```
+
 参考：PhotonTrueSync/Fix64
